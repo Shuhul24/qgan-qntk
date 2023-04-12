@@ -15,7 +15,7 @@ from qiskit.opflow import (StateFn, PauliSumOp, Gradient, AerPauliExpectation)
 from qiskit_machine_learning.neural_networks import OpflowQNN
 import matplotlib.pyplot as plt
 
-#Function for generator's loss function
+# Function for generator's loss function
 def generator_cost(gen_params):
         curr_params = np.append(disc_params.numpy(),
                                 gen_params.numpy())
@@ -25,7 +25,7 @@ def generator_cost(gen_params):
         return cost
 
 
-#Function for layerwise-circuit drawing for discriminator
+# Function for layerwise-circuit drawing for discriminator
 def layer(qubits, num_layers, circ, disc_weights):
         for i in range(qubits):
                 circ.h(i)
@@ -43,7 +43,7 @@ def layer(qubits, num_layers, circ, disc_weights):
 
         return circ
 
-#Function for discriminator's loss function
+# Function for discriminator's loss function
 def discriminator_cost(disc_params):
         curr_params = np.append(disc_params.numpy(),
                                 gen_params.numpy())
@@ -67,13 +67,13 @@ def calculate_kl_divergence(model_distribution: dict, target_distribution: dict)
         return kl_div
 
 if __name__=="__main__":
-        EPOCHS = 300 #Number of iterations / training epochs
-        REAL_DIST_NQUBITS = 3 #Number of qubits
+        EPOCHS = 300 # Number of iterations / training epochs
+        REAL_DIST_NQUBITS = 3 # Number of qubits
         measurement = 'Z' + ('I' * REAL_DIST_NQUBITS)
-        real_circuit = NormalDistribution(REAL_DIST_NQUBITS, mu=0, sigma=0.15) #This is the circuit for target distribution
-        layers = 2 #Number of layers in discriminator
-#For generator circuit, we have taken an in-built function 'TwoLocal'
-#'TwoLocal' consists of alternating rotation and entanglement gates
+        real_circuit = NormalDistribution(REAL_DIST_NQUBITS, mu=0, sigma=0.15) # This is the circuit for target state
+        layers = 2 # Number of layers in discriminator
+# For generator circuit, we have taken an in-built function 'TwoLocal'
+# 'TwoLocal' consists of alternating rotation and entanglement gates
         generator = TwoLocal(REAL_DIST_NQUBITS,
                         ['ry', 'rz'],
                         'cz',
@@ -82,11 +82,11 @@ if __name__=="__main__":
                         parameter_prefix='θ_g',
                         name='Generator')
 
-#Parameter Vector for discriminator
+# Parameter Vector for discriminator
         disc_weights = ParameterVector('θ_d', (3 * (REAL_DIST_NQUBITS + 1) * layers) + 3)
 
         circuit = QuantumCircuit(REAL_DIST_NQUBITS+1, name="Discriminator")
-#Discriminator circuit using function 'layer' indicating how many layers of block are being used
+# Discriminator circuit using function 'layer' indicating how many layers of block are being used
         discriminator = layer(REAL_DIST_NQUBITS+1, layers, circuit, disc_weights)
         
         N_GPARAMS = generator.num_parameters
@@ -100,32 +100,40 @@ if __name__=="__main__":
         real_disc_circuit.compose(real_circuit, inplace=True)
         real_disc_circuit.compose(discriminator, inplace=True)
 
-        expval = AerPauliExpectation()
+
+        expval = AerPauliExpectation() # method to calculate expectation value
         gradient = Gradient()
+# Creating a Quantum Instance (statevector)
         qi_sv = QuantumInstance(Aer.get_backend('aer_simulator_statevector'))
+# Circuit's wavefunction using 'StateFn' method
         gen_disc_sfn = StateFn(gen_disc_circuit)
         real_disc_sfn = StateFn(real_disc_circuit)
+
         H1 = StateFn(PauliSumOp.from_list([(measurement, 1.0)]))
+
+# Combine operator and circuit
         gendisc_op = ~H1 @ gen_disc_sfn
         realdisc_op = ~H1 @ real_disc_sfn
 
+# Calling QNN for updating the generator's weights
         gen_opqnn = OpflowQNN(gendisc_op,
-            gen_disc_circuit.parameters[:N_DPARAMS],
-            gen_disc_circuit.parameters[N_DPARAMS:],
+            gen_disc_circuit.parameters[:N_DPARAMS], # input parameters (generator weights)
+            gen_disc_circuit.parameters[N_DPARAMS:], # differentiable parameters (discriminator weights)
             expval,
             gradient,
             qi_sv)
 
-        disc_fake_opqnn = OpflowQNN(gendisc_op,
-            gen_disc_circuit.parameters[N_DPARAMS:],
-            gen_disc_circuit.parameters[:N_DPARAMS],
-            expval,
+# Calling QNN for updating the discriminator's weights
+        disc_fake_opqnn = OpflowQNN(gendisc_op,  
+            gen_disc_circuit.parameters[N_DPARAMS:], # input parameters (generator weights)
+            gen_disc_circuit.parameters[:N_DPARAMS], # differentiable parameters (discriminator weights)
+            expval,  
             gradient,
             qi_sv)
 
         disc_real_opqnn = OpflowQNN(realdisc_op,
             [],
-            gen_disc_circuit.parameters[:N_DPARAMS],
+            gen_disc_circuit.parameters[:N_DPARAMS], # differentiable parameters (discriminator weights)
             expval,
             gradient,
             qi_sv)
@@ -146,10 +154,13 @@ if __name__=="__main__":
         for epoch in range(EPOCHS):
                 D_STEPS = 5
                 for disc_train_step in range(D_STEPS):
+                        # Differential with respect to discriminator weights (considering input parameters of generator circuit)
                         grad_dcost_fake = disc_fake_opqnn.backward(gen_params,
                                 disc_params)[1][0, 0]
+                        # Differential with respect to discriminator weights (considering input parameters of target circuit)
                         grad_dcost_real = disc_real_opqnn.backward([],
                                 disc_params)[1][0, 0]
+                        # Evaluate the discriminator's cost
                         grad_dcost = grad_dcost_real - grad_dcost_fake
                         grad_dcost = tf.convert_to_tensor(grad_dcost)
                         discriminator_optimizer.apply_gradients(zip([grad_dcost],
@@ -157,6 +168,7 @@ if __name__=="__main__":
                         if disc_train_step % D_STEPS == 0:
                                 dloss.append(discriminator_cost(disc_params))
                 for gen_train_step in range(1):
+                        # Differential with respect to generator weights
                         grad_gcost = gen_opqnn.backward(disc_params, 
                                 gen_params)[1][0, 0]
                         grad_gcost = tf.convert_to_tensor(grad_gcost)
@@ -165,10 +177,12 @@ if __name__=="__main__":
                         gloss.append(generator_cost(gen_params))
 
                 gen_checkpoint_circuit = generator.bind_parameters(gen_params.numpy())
+                # Evaluating the state from generator in 'Statevector'
                 gen_prob_dict = Statevector(gen_checkpoint_circuit).probabilities_dict()
                 real_prob_dict = Statevector(real_circuit).probabilities_dict()
                 current_kl = calculate_kl_divergence(gen_prob_dict, real_prob_dict)
                 kl_div.append(current_kl)
+                # Measuring the fidelities between generated and target state using 'state_fidelity' method
                 fidelity.append(state_fidelity(Statevector(gen_checkpoint_circuit), Statevector(real_circuit)))
 
         plt.rcParams["font.family"] = "serif"
@@ -182,6 +196,7 @@ if __name__=="__main__":
 
         np.save('./result_data.npy', res)
 
+# Plotting
         fig, (loss, fid) = plt.subplots(2, sharex=True,
                                         gridspec_kw={'height_ratios': [1, 1]},
                                         figsize = (12,12))
